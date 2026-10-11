@@ -105,6 +105,7 @@ ol{margin:0;padding-left:1.2em;font-size:14px;display:flex;flex-direction:column
       <button class="primary" id="btnSensor">啟用指南針</button>
       <button class="primary" id="btnCapture" disabled>記錄這一次</button>
     </div>
+    <p class="hint" id="sensorMsg" role="status" aria-live="polite" hidden></p>
     <div class="row">
       <label for="manual">或手動輸入羅盤讀數
         <input id="manual" type="number" inputmode="decimal" min="0" max="360" step="0.1" placeholder="例 172">
@@ -268,17 +269,27 @@ function onOri(e){
   if(e.beta!=null&&e.gamma!=null) S.tilt=Math.max(Math.abs(e.beta),Math.abs(e.gamma));
   S.acc=typeof e.webkitCompassAccuracy==='number'?e.webkitCompassAccuracy:null;
 }
+function sensorMsg(t){const m=$('sensorMsg');m.textContent=t;m.hidden=!t}
 async function startSensor(){
-  try{
-    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
-      const r=await DeviceOrientationEvent.requestPermission(); if(r!=='granted') throw 0;
-    }
-    window.addEventListener('deviceorientationabsolute',onOri,true);
-    window.addEventListener('deviceorientation',onOri,true);
-    setChip('chipSensor','指南針：等待讀數…','');
-    try{if(navigator.wakeLock) navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
-    setTimeout(()=>{if(S.mag==null) setChip('chipSensor','指南針：讀不到，請手動輸入','warn')},3000);
-  }catch(e){setChip('chipSensor','指南針：被拒或不支援，請手動輸入','warn')}
+  const ua=navigator.userAgent, inApp=/Line\/|FBAN|FBAV|Instagram|MicroMessenger|Messenger|Telegram/i.test(ua);
+  if(!window.isSecureContext){sensorMsg('這個網址不是 https，瀏覽器不給指南針。請用 https:// 開頭的網址。');setChip('chipSensor','指南針：需要 https','warn');return}
+  if(typeof DeviceOrientationEvent==='undefined'){sensorMsg('這個瀏覽器沒有方向感測器。請用 iPhone 內建的 Safari 開這個網址。');setChip('chipSensor','指南針：瀏覽器不支援','warn');return}
+  let result='no-prompt-needed';
+  if(typeof DeviceOrientationEvent.requestPermission==='function'){
+    try{result=await DeviceOrientationEvent.requestPermission()}
+    catch(e){sensorMsg('權限請求失敗（'+(e&&e.name||'錯誤')+'）。'+(inApp?'你在其他 app 的內建瀏覽器裡，請改用 Safari 開。':'請關掉 Safari 再開一次，然後直接點這個按鈕。'));setChip('chipSensor','指南針：權限請求失敗','warn');return}
+    if(result!=='granted'){sensorMsg('Safari 記住了上次的「不允許」，所以不再跳出詢問。到 設定 → App → Safari → 進階 → 網站資料，刪除 github.io，關掉 Safari 再開。'+(inApp?' 你現在也在其他 app 的內建瀏覽器裡，請改用 Safari。':''));setChip('chipSensor','指南針：權限被拒','warn');return}
+  }
+  window.addEventListener('deviceorientationabsolute',onOri,true);
+  window.addEventListener('deviceorientation',onOri,true);
+  setChip('chipSensor','指南針：等待讀數…','');
+  sensorMsg(result==='granted'?'已取得權限，等待讀數…':'');
+  try{if(navigator.wakeLock) navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
+  setTimeout(()=>{
+    if(S.mag!=null){sensorMsg('');return}
+    setChip('chipSensor','指南針：讀不到，請手動輸入','warn');
+    sensorMsg((result==='granted'?'權限已允許，但 3 秒內沒有收到方位讀數。':'沒有收到方位讀數。')+(inApp?'你在其他 app 的內建瀏覽器裡，請改用 Safari 開。':'請確認是用 Safari 開，並在 設定 → 隱私權與安全性 → 定位服務 → 系統服務 打開「指南針校正」。'));
+  },3000);
 }
 function setChip(id,text,cls){const c=$(id);c.textContent=text;c.className='chip'+(cls?' '+cls:'')}
 
