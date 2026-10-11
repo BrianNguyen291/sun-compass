@@ -1,0 +1,438 @@
+<title>太陽校正羅盤</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single instrument column — dial on top, live readouts, then calibration log and location */
+:root{
+  --bg:#eef2f4; --panel:#ffffff; --ink:#1b2a36; --muted:#5d6d78; --line:#d3dce1;
+  --sun:#d9870f; --sun-soft:#fbe9c8; --north:#c2412d; --ok:#2f7d55; --warn:#b5651d;
+  --f-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#10181e; --panel:#18232b; --ink:#e4ecf0; --muted:#93a4ae; --line:#2b3a44;
+  --sun:#f2a93b; --sun-soft:#3a2c14; --north:#ec6a52; --ok:#5cbf8a; --warn:#e3984f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10181e; --panel:#18232b; --ink:#e4ecf0; --muted:#93a4ae; --line:#2b3a44;
+  --sun:#f2a93b; --sun-soft:#3a2c14; --north:#ec6a52; --ok:#5cbf8a; --warn:#e3984f; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
+.wrap{max-width:480px;margin:0 auto;padding-inline:16px;padding-block:16px 40px;display:flex;flex-direction:column;gap:14px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+h1{font-size:22px;margin:0;font-weight:700;letter-spacing:.02em}
+.clock{font-family:var(--f-num);color:var(--muted);font-size:13px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);background:var(--panel)}
+.chip.ok{color:var(--ok);border-color:currentColor}
+.chip.warn{color:var(--warn);border-color:currentColor}
+.dialbox{position:relative;aspect-ratio:1;max-width:100%;width:100%}
+canvas{width:100%;height:100%;display:block}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cell{background:var(--panel);padding:10px 12px;min-width:0}
+.lab{font-size:12px;color:var(--muted);letter-spacing:.04em}
+.val{font-family:var(--f-num);font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}
+.val small{font-size:13px;color:var(--muted);font-weight:400;margin-left:4px}
+.cell.hero .val{color:var(--sun)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
+h2{font-size:16px;margin:0}
+p{margin:0}
+.hint{font-size:13px;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font:inherit;font-size:14px;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer}
+button.primary{background:var(--sun);border-color:var(--sun);color:#1b1306;font-weight:700}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent}
+.seg button[aria-pressed="true"]{background:var(--sun-soft);color:var(--ink);font-weight:700}
+input{font:inherit;font-family:var(--f-num);width:7.5em;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+label{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
+table{width:100%;border-collapse:collapse;font-family:var(--f-num);font-size:13px;font-variant-numeric:tabular-nums}
+td,th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:right}
+th{font-family:var(--f-body);font-weight:500;color:var(--muted);font-size:12px}
+td:first-child,th:first-child{text-align:left}
+.summary{display:flex;gap:16px;flex-wrap:wrap;font-family:var(--f-num)}
+.summary b{font-size:20px;color:var(--sun)}
+.banner{font-size:13px;padding:8px 10px;border-radius:8px;background:var(--sun-soft)}
+ol{margin:0;padding-left:1.2em;font-size:14px;display:flex;flex-direction:column;gap:4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>太陽校正羅盤</h1>
+    <span class="clock" id="clock">--:--:--</span>
+  </header>
+  <div class="chips">
+    <span class="chip" id="chipLoc">位置：台北（預設）</span>
+    <span class="chip" id="chipSensor">指南針：未啟用</span>
+    <span class="chip" id="chipCal">尚未校正</span>
+  </div>
+
+  <div class="dialbox"><canvas id="dial" aria-label="羅盤盤面，橘點為太陽方向"></canvas></div>
+
+  <div class="grid">
+    <div class="cell hero"><div class="lab">太陽方位角</div><div class="val" id="vSunAz">--<small>°</small></div></div>
+    <div class="cell"><div class="lab">太陽高度角</div><div class="val" id="vSunAlt">--<small>°</small></div></div>
+    <div class="cell"><div class="lab">磁力計航向</div><div class="val" id="vMag">--<small>°</small></div></div>
+    <div class="cell"><div class="lab">校正後航向（真北）</div><div class="val" id="vTrue">--<small>°</small></div></div>
+    <div class="cell"><div class="lab">磁偏角（WMM 自動推算）</div><div class="val" id="vDecl">--<small>°</small></div></div>
+    <div class="cell"><div class="lab" id="vCorrLab">目前修正</div><div class="val" id="vCorr">--<small>°</small></div></div>
+  </div>
+  <div class="banner" id="sunNote">計算中…</div>
+
+  <section>
+    <h2>時間推算</h2>
+    <p class="hint" id="tLab">現在</p>
+    <input id="tsim" type="range" min="0" max="1430" step="10" value="0" style="width:100%" aria-label="往後推算的時間">
+    <div class="row">
+      <button id="tNow">回到現在</button>
+      <button id="tMorning">跳到明早適合校正</button>
+      <button id="tPlay" aria-pressed="false">▶ 播放 24 小時</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>校正</h2>
+    <div class="row">
+      <span class="seg" role="group" aria-label="對準方式">
+        <button id="mSun" aria-pressed="true">手機頂端指向太陽</button>
+        <button id="mShadow" aria-pressed="false">頂端順著影子</button>
+      </span>
+    </div>
+    <p class="hint" id="modeHint">手機平放，在頂端立一支筆。轉動手機，讓筆的影子沿著手機中線往底部延伸，這時頂端就指向太陽。不要直視太陽。</p>
+    <div class="row">
+      <button class="primary" id="btnSensor">啟用指南針</button>
+      <button class="primary" id="btnCapture" disabled>記錄這一次</button>
+    </div>
+    <div class="row">
+      <label for="manual">或手動輸入羅盤讀數
+        <input id="manual" type="number" inputmode="decimal" min="0" max="360" step="0.1" placeholder="例 172">
+      </label>
+      <button id="btnManual" style="align-self:flex-end">記錄讀數</button>
+    </div>
+    <p class="hint">感測器讀不到時（例如在內嵌頁面），打開 iPhone 內建「指南針」，對準後把度數填進來。請先到 設定 → 指南針 關閉「使用真北」，讀數才會和感測器一樣是磁北，兩種紀錄混用也不會差 5°。</p>
+
+    <div class="summary">
+      <span>平均偏差 <b id="sMean">--</b></span>
+      <span>離散 ±<b id="sStd">--</b></span>
+      <span>次數 <b id="sN">0</b></span>
+    </div>
+    <p class="hint" id="sCmp"></p>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>時間</th><th>太陽</th><th>高度</th><th>讀數</th><th>偏差</th></tr></thead>
+        <tbody id="log"><tr><td colspan="5" style="text-align:left;color:var(--muted);font-family:var(--f-body)">還沒有紀錄。下方是三筆示範，按「清除」會一起移除。</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <button id="btnUndo">刪除最後一筆</button>
+      <button id="btnClear">清除全部</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>換算</h2>
+    <p class="hint">有太陽校正就用太陽的偏差，沒有就用自動推算的磁偏角，把羅盤讀數換成真北方位。</p>
+    <div class="row">
+      <label for="conv">羅盤讀數
+        <input id="conv" type="number" inputmode="decimal" min="0" max="360" step="0.1" value="90">
+      </label>
+      <span style="align-self:flex-end;font-family:var(--f-num);font-size:20px">→ <b id="convOut" style="color:var(--sun)">--</b></span>
+    </div>
+    <p class="hint" id="convSrc"></p>
+  </section>
+
+  <section>
+    <h2>位置</h2>
+    <div class="row">
+      <label for="lat">緯度<input id="lat" type="number" step="0.0001" value="25.0330"></label>
+      <label for="lon">經度<input id="lon" type="number" step="0.0001" value="121.5654"></label>
+      <button id="btnGeo" style="align-self:flex-end">使用定位</button>
+    </div>
+    <div class="row">
+      <button id="btnAuto" aria-pressed="true">自動切到白天的城市：開</button>
+    </div>
+    <p class="hint">開啟時，這裡如果是晚上，會自動換成目前太陽高度最適合的城市來示範；你點城市或改座標就會關閉。</p>
+    <div class="row" id="presets">
+      <button data-lat="25.0330" data-lon="121.5654">台北</button>
+      <button data-lat="34.0522" data-lon="-118.2437">洛杉磯</button>
+      <button data-lat="40.7128" data-lon="-74.0060">紐約</button>
+      <button data-lat="-23.5505" data-lon="-46.6333">聖保羅</button>
+      <button data-lat="51.5074" data-lon="-0.1278">倫敦</button>
+      <button data-lat="-33.8688" data-lon="151.2093">雪梨</button>
+    </div>
+    <p class="hint">位置差 10 公里，太陽方位只差約 0.1°，填城市座標就夠準。</p>
+  </section>
+
+  <section>
+    <h2>怎麼用</h2>
+    <ol>
+      <li>選早上或下午，太陽高度 15°–60° 最好。</li>
+      <li>離開車子、鐵欄杆、喇叭，拿掉磁吸手機殼。</li>
+      <li>手機平放，頂端對準太陽或順著影子，按「記錄這一次」。</li>
+      <li>原地轉一圈再對一次，記 3–5 次，看離散是否小於 2°。</li>
+      <li>之後盤面和「校正後航向」就會自動套用平均偏差。</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function(){
+const R=Math.PI/180, $=id=>document.getElementById(id);
+const norm=a=>((a%360)+360)%360, wrap180=a=>{a=norm(a);return a>180?a-360:a};
+const fmt=(a,d=1)=>{if(a==null||isNaN(a))return'--';const t=a.toFixed(d);return /^-0\.?0*$/.test(t)?t.slice(1):t};
+
+function sunPos(date,lat,lon){
+  const n=date.getTime()/86400000+2440587.5-2451545.0;
+  const L=(280.460+0.9856474*n)%360, g=(357.528+0.9856003*n)*R;
+  const lam=(L+1.915*Math.sin(g)+0.020*Math.sin(2*g))*R, eps=(23.439-0.0000004*n)*R;
+  const ra=Math.atan2(Math.cos(eps)*Math.sin(lam),Math.cos(lam)), dec=Math.asin(Math.sin(eps)*Math.sin(lam));
+  const gmst=(280.46061837+360.98564736629*n)%360, H=(gmst+lon)*R-ra, p=lat*R;
+  let alt=Math.asin(Math.sin(p)*Math.sin(dec)+Math.cos(p)*Math.cos(dec)*Math.cos(H))/R;
+  if(alt>-1) alt+=1.02/Math.tan((alt+10.3/(alt+5.11))*R)/60; // 大氣折射
+  const az=Math.atan2(Math.sin(H),Math.cos(H)*Math.sin(p)-Math.tan(dec)*Math.cos(p))/R+180;
+  return {az:norm(az),alt};
+}
+
+const WMM_COF=[[1,0,-29351.8,0.0,12.0,0.0],[1,1,-1410.8,4545.4,9.7,-21.5],[2,0,-2556.6,0.0,-11.6,0.0],[2,1,2951.1,-3133.6,-5.2,-27.7],[2,2,1649.3,-815.1,-8.0,-12.1],[3,0,1361.0,0.0,-1.3,0.0],[3,1,-2404.1,-56.6,-4.2,4.0],[3,2,1243.8,237.5,0.4,-0.3],[3,3,453.6,-549.5,-15.6,-4.1],[4,0,895.0,0.0,-1.6,0.0],[4,1,799.5,278.6,-2.4,-1.1],[4,2,55.7,-133.9,-6.0,4.1],[4,3,-281.1,212.0,5.6,1.6],[4,4,12.1,-375.6,-7.0,-4.4],[5,0,-233.2,0.0,0.6,0.0],[5,1,368.9,45.4,1.4,-0.5],[5,2,187.2,220.2,0.0,2.2],[5,3,-138.7,-122.9,0.6,0.4],[5,4,-142.0,43.0,2.2,1.7],[5,5,20.9,106.1,0.9,1.9],[6,0,64.4,0.0,-0.2,0.0],[6,1,63.8,-18.4,-0.4,0.3],[6,2,76.9,16.8,0.9,-1.6],[6,3,-115.7,48.8,1.2,-0.4],[6,4,-40.9,-59.8,-0.9,0.9],[6,5,14.9,10.9,0.3,0.7],[6,6,-60.7,72.7,0.9,0.9],[7,0,79.5,0.0,-0.0,0.0],[7,1,-77.0,-48.9,-0.1,0.6],[7,2,-8.8,-14.4,-0.1,0.5],[7,3,59.3,-1.0,0.5,-0.8],[7,4,15.8,23.4,-0.1,0.0],[7,5,2.5,-7.4,-0.8,-1.0],[7,6,-11.1,-25.1,-0.8,0.6],[7,7,14.2,-2.3,0.8,-0.2],[8,0,23.2,0.0,-0.1,0.0],[8,1,10.8,7.1,0.2,-0.2],[8,2,-17.5,-12.6,0.0,0.5],[8,3,2.0,11.4,0.5,-0.4],[8,4,-21.7,-9.7,-0.1,0.4],[8,5,16.9,12.7,0.3,-0.5],[8,6,15.0,0.7,0.2,-0.6],[8,7,-16.8,-5.2,-0.0,0.3],[8,8,0.9,3.9,0.2,0.2],[9,0,4.6,0.0,-0.0,0.0],[9,1,7.8,-24.8,-0.1,-0.3],[9,2,3.0,12.2,0.1,0.3],[9,3,-0.2,8.3,0.3,-0.3],[9,4,-2.5,-3.3,-0.3,0.3],[9,5,-13.1,-5.2,0.0,0.2],[9,6,2.4,7.2,0.3,-0.1],[9,7,8.6,-0.6,-0.1,-0.2],[9,8,-8.7,0.8,0.1,0.4],[9,9,-12.9,10.0,-0.1,0.1],[10,0,-1.3,0.0,0.1,0.0],[10,1,-6.4,3.3,0.0,0.0],[10,2,0.2,0.0,0.1,-0.0],[10,3,2.0,2.4,0.1,-0.2],[10,4,-1.0,5.3,-0.0,0.1],[10,5,-0.6,-9.1,-0.3,-0.1],[10,6,-0.9,0.4,0.0,0.1],[10,7,1.5,-4.2,-0.1,0.0],[10,8,0.9,-3.8,-0.1,-0.1],[10,9,-2.7,0.9,-0.0,0.2],[10,10,-3.9,-9.1,-0.0,-0.0],[11,0,2.9,0.0,0.0,0.0],[11,1,-1.5,0.0,-0.0,-0.0],[11,2,-2.5,2.9,0.0,0.1],[11,3,2.4,-0.6,0.0,-0.0],[11,4,-0.6,0.2,0.0,0.1],[11,5,-0.1,0.5,-0.1,-0.0],[11,6,-0.6,-0.3,0.0,-0.0],[11,7,-0.1,-1.2,-0.0,0.1],[11,8,1.1,-1.7,-0.1,-0.0],[11,9,-1.0,-2.9,-0.1,0.0],[11,10,-0.2,-1.8,-0.1,0.0],[11,11,2.6,-2.3,-0.1,0.0],[12,0,-2.0,0.0,0.0,0.0],[12,1,-0.2,-1.3,0.0,-0.0],[12,2,0.3,0.7,-0.0,0.0],[12,3,1.2,1.0,-0.0,-0.1],[12,4,-1.3,-1.4,-0.0,0.1],[12,5,0.6,-0.0,-0.0,-0.0],[12,6,0.6,0.6,0.1,-0.0],[12,7,0.5,-0.1,-0.0,-0.0],[12,8,-0.1,0.8,0.0,0.0],[12,9,-0.4,0.1,0.0,-0.0],[12,10,-0.2,-1.0,-0.1,-0.0],[12,11,-1.3,0.1,-0.0,0.0],[12,12,-0.7,0.2,-0.1,-0.1]];
+function declination(glat,glon,year){
+  const R=Math.PI/180,N=12,re=6371.2,a2=6378.137**2,b2=6356.7523142**2,c2=a2-b2,a4=a2*a2,b4=b2*b2,c4=a4-b4;
+  const dt=year-2025, G=[],H=[];
+  for(let n=0;n<=N;n++){G.push(new Array(N+1).fill(0));H.push(new Array(N+1).fill(0))}
+  WMM_COF.forEach(([n,m,g,h,gd,hd])=>{G[n][m]=g+gd*dt;H[n][m]=h+hd*dt});
+  const sl=Math.sin(glat*R),cl=Math.cos(glat*R),q=Math.sqrt(a2-c2*sl*sl),q2=((a2)/(b2))**2;
+  const ct=sl/Math.sqrt(q2*cl*cl+sl*sl),st=Math.sqrt(1-ct*ct);
+  const r=Math.sqrt((a4-c4*sl*sl)/(q*q)),d=Math.sqrt(a2*cl*cl+b2*sl*sl),ca=d/r,sa=c2*cl*sl/(r*d);
+  const P=[],D=[],S=[];
+  for(let n=0;n<=N;n++){P.push([]);D.push([]);S.push([])}
+  P[0][0]=1;D[0][0]=0;S[0][0]=1;
+  for(let n=1;n<=N;n++){
+    S[n][0]=S[n-1][0]*(2*n-1)/n;
+    for(let m=1;m<=n;m++)S[n][m]=S[n][m-1]*Math.sqrt((n-m+1)*(m===1?2:1)/(n+m));
+    for(let m=0;m<=n;m++){
+      if(m===n){P[n][n]=st*P[n-1][n-1];D[n][n]=st*D[n-1][n-1]+ct*P[n-1][n-1]}
+      else{const K=n>1?((n-1)**2-m*m)/((2*n-1)*(2*n-3)):0;
+        const p2=n>1&&m<=n-2?P[n-2][m]:0,d2=n>1&&m<=n-2?D[n-2][m]:0;
+        P[n][m]=ct*P[n-1][m]-K*p2;D[n][m]=ct*D[n-1][m]-st*P[n-1][m]-K*d2}
+    }
+  }
+  let br=0,bt=0,bp=0;const ph=glon*R;
+  for(let n=1;n<=N;n++){const ar=(re/r)**(n+2);
+    for(let m=0;m<=n;m++){
+      const g=G[n][m]*S[n][m],h=H[n][m]*S[n][m],cm=Math.cos(m*ph),sm=Math.sin(m*ph);
+      const P_=P[n][m],D_=D[n][m];
+      br+=ar*(n+1)*(g*cm+h*sm)*P_;
+      bt-=ar*(g*cm+h*sm)*D_;
+      bp+=ar*m*(g*sm-h*cm)*P_;
+    }}
+  bp/=st;
+  const X=-bt*ca-br*sa,Y=bp;
+  return Math.atan2(Y,X)/R;
+}
+
+const S={tOff:0,decl:0,lat:25.033,lon:121.5654,mode:'sun',mag:null,sx:null,sy:null,samples:[],demo:true,sun:{az:0,alt:0}};
+const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const saved=store.get('sc-state');
+if(saved){Object.assign(S,{lat:saved.lat??S.lat,lon:saved.lon??S.lon,samples:saved.samples||[],demo:false});$('lat').value=S.lat;$('lon').value=S.lon}
+else{ // 示範資料
+  const t=Date.now();
+  S.samples=[{t:t-600000,sun:142.3,alt:41.2,read:146.9},{t:t-420000,sun:142.9,alt:41.8,read:147.1},{t:t-240000,sun:143.4,alt:42.3,read:148.6}];
+}
+const persist=()=>store.set('sc-state',{lat:S.lat,lon:S.lon,samples:S.demo?[]:S.samples});
+
+function stats(){
+  const n=S.samples.length; if(!n) return null;
+  let sx=0,sy=0; const offs=S.samples.map(s=>wrap180(s.sun-s.read));
+  offs.forEach(o=>{sx+=Math.cos(o*R);sy+=Math.sin(o*R)});
+  const mean=Math.atan2(sy,sx)/R, Rb=Math.hypot(sx,sy)/n;
+  const std=n>1?Math.sqrt(-2*Math.log(Math.min(1,Rb)))/R:0;
+  return {mean,std,n,offs};
+}
+
+let declKey='';
+function homeDecl(now){const yr=now.getUTCFullYear()+(now-Date.UTC(now.getUTCFullYear(),0,1))/31557600000;const k=S.lat.toFixed(3)+','+S.lon.toFixed(3)+','+yr.toFixed(2);if(k!==declKey){declKey=k;S.decl=declination(S.lat,S.lon,yr)}return S.decl}
+function corr(){const st=stats();if(st&&!S.demo)return{off:st.mean,src:'太陽校正'};return{off:S.decl,src:'磁偏角（自動）'}}
+// ---- 感測器 ----
+function onOri(e){
+  let h=null;
+  if(typeof e.webkitCompassHeading==='number') h=e.webkitCompassHeading;
+  else if(e.absolute&&e.alpha!=null) h=360-e.alpha;
+  if(h==null) return;
+  const ang=(screen.orientation&&screen.orientation.angle)||window.orientation||0;
+  h=norm(h+ang);
+  const k=0.15; // 平滑
+  S.sx=S.sx==null?Math.cos(h*R):S.sx*(1-k)+Math.cos(h*R)*k;
+  S.sy=S.sy==null?Math.sin(h*R):S.sy*(1-k)+Math.sin(h*R)*k;
+  S.mag=norm(Math.atan2(S.sy,S.sx)/R);
+  if(e.beta!=null&&e.gamma!=null) S.tilt=Math.max(Math.abs(e.beta),Math.abs(e.gamma));
+  S.acc=typeof e.webkitCompassAccuracy==='number'?e.webkitCompassAccuracy:null;
+}
+async function startSensor(){
+  try{
+    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+      const r=await DeviceOrientationEvent.requestPermission(); if(r!=='granted') throw 0;
+    }
+    window.addEventListener('deviceorientationabsolute',onOri,true);
+    window.addEventListener('deviceorientation',onOri,true);
+    setChip('chipSensor','指南針：等待讀數…','');
+    try{if(navigator.wakeLock) navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
+    setTimeout(()=>{if(S.mag==null) setChip('chipSensor','指南針：讀不到，請手動輸入','warn')},3000);
+  }catch(e){setChip('chipSensor','指南針：被拒或不支援，請手動輸入','warn')}
+}
+function setChip(id,text,cls){const c=$(id);c.textContent=text;c.className='chip'+(cls?' '+cls:'')}
+
+function target(){return norm(S.sun.az+(S.mode==='shadow'?180:0))}
+function addSample(read,src){
+  if(S.demo){S.samples=[];S.demo=false}
+  S.samples.push({t:Date.now(),sun:target(),alt:S.sun.alt,read:norm(read),src:src||'感'});
+  persist();renderLog();
+}
+
+// ---- 繪圖 ----
+const cv=$('dial'), ctx=cv.getContext('2d');
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+function draw(){
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth; if(!w) return;
+  if(cv.width!==Math.round(w*dpr)){cv.width=cv.height=Math.round(w*dpr)}
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,w);
+  const c=w/2, r=c-10, st=stats();
+  const trueH=S.mag!=null?norm(S.mag+corr().off):0;
+  const ink=css('--ink'),muted=css('--muted'),line=css('--line'),sun=css('--sun'),north=css('--north'),panel=css('--panel');
+  ctx.save();ctx.translate(c,c);
+  ctx.beginPath();ctx.arc(0,0,r,0,7);ctx.fillStyle=panel;ctx.fill();ctx.lineWidth=1;ctx.strokeStyle=line;ctx.stroke();
+  ctx.rotate(-trueH*R);
+  for(let a=0;a<360;a+=5){
+    const big=a%30===0, len=big?14:(a%10===0?8:5);
+    ctx.save();ctx.rotate(a*R);ctx.beginPath();ctx.moveTo(0,-r+2);ctx.lineTo(0,-r+2+len);
+    ctx.strokeStyle=big?ink:muted;ctx.lineWidth=big?2:1;ctx.stroke();
+    if(big&&a%90!==0){ctx.fillStyle=muted;ctx.font='12px '+css('--f-num');ctx.textAlign='center';ctx.fillText(a,0,-r+32)}
+    ctx.restore();
+  }
+  [['北',0,north],['東',90,ink],['南',180,ink],['西',270,ink]].forEach(([t,a,col])=>{
+    ctx.save();ctx.rotate(a*R);ctx.fillStyle=col;ctx.font='700 18px '+css('--f-body');ctx.textAlign='center';ctx.fillText(t,0,-r+38);ctx.restore();
+  });
+  // 太陽方向
+  ctx.save();ctx.rotate(S.sun.az*R);
+  const sr=r*Math.max(.18,Math.min(.62,.62-(Math.max(0,S.sun.alt)/90)*.44));
+  ctx.setLineDash([4,5]);ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,-sr);ctx.strokeStyle=sun;ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+  ctx.beginPath();ctx.arc(0,-sr,S.sun.alt>0?11:7,0,7);ctx.fillStyle=S.sun.alt>0?sun:muted;ctx.fill();
+  // 影子方向
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,sr*.75);ctx.strokeStyle=muted;ctx.lineWidth=3;ctx.globalAlpha=.35;ctx.stroke();ctx.globalAlpha=1;
+  ctx.restore();
+  ctx.restore();
+  // 固定的手機頂端指針
+  ctx.beginPath();ctx.moveTo(c,4);ctx.lineTo(c-8,20);ctx.lineTo(c+8,20);ctx.closePath();ctx.fillStyle=ink;ctx.fill();
+  ctx.beginPath();ctx.arc(c,c,4,0,7);ctx.fillStyle=ink;ctx.fill();
+  ctx.fillStyle=ink;ctx.font='600 30px '+css('--f-num');ctx.textAlign='center';
+  ctx.fillText(S.mag!=null?fmt(trueH,0)+'°':'—',c,c+48);
+  ctx.fillStyle=muted;ctx.font='12px '+css('--f-body');
+  ctx.fillText(S.mag!=null?'套用'+corr().src:'盤面依太陽方位繪製，北在上',c,c+68);
+}
+
+function renderLog(){
+  const st=stats(), tb=$('log');
+  if(!st){tb.innerHTML='<tr><td colspan="5" style="text-align:left;color:var(--muted);font-family:var(--f-body)">還沒有紀錄。</td></tr>'}
+  else tb.innerHTML=S.samples.map((s,i)=>{
+    const t=new Date(s.t), hh=t.toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit',hour12:false});
+    return `<tr><td>${hh}${S.demo?' 示範':''}</td><td>${fmt(s.sun)}°</td><td>${fmt(s.alt,0)}°</td><td>${fmt(s.read)}°${s.src==='手'?' 手':''}</td><td>${st.offs[i]>=0?'+':''}${fmt(st.offs[i])}°</td></tr>`
+  }).join('');
+  $('sMean').textContent=st?(st.mean>=0?'+':'')+fmt(st.mean)+'°':'--';
+  $('sStd').textContent=st&&st.n>1?fmt(st.std)+'°':'--';
+  $('sN').textContent=st?st.n:0;
+  if(!st) setChip('chipCal','尚未校正','');
+  else if(S.demo) setChip('chipCal','顯示示範資料','');
+  else if(Date.now()-S.samples[S.samples.length-1].t>7*86400000) setChip('chipCal','校正已超過 7 天，建議重做','warn');
+  else if(st.n<3) setChip('chipCal','再多記幾次','warn');
+  else if(st.std<=2) setChip('chipCal','校正良好 ±'+fmt(st.std)+'°','ok');
+  else setChip('chipCal','離散偏大，檢查磁干擾','warn');
+  const dcl=homeDecl(new Date());
+  $('sCmp').textContent=st&&!S.demo?'和 WMM 磁偏角 '+fmt(dcl)+'° 相差 '+fmt(wrap180(st.mean-dcl))+'°，這部分就是手機磁力計本身的誤差。':'';
+  updConv();
+}
+function updConv(){const v=parseFloat($('conv').value),c=corr();$('convOut').textContent=!isNaN(v)?fmt(norm(v+c.off))+'°':'--';$('convSrc').textContent='使用'+c.src+' '+(c.off>=0?'+':'')+fmt(c.off)+'°'}
+
+const CITIES=[['台北',25.033,121.565],['東京',35.68,139.69],['雪梨',-33.87,151.21],['新加坡',1.35,103.82],['新德里',28.61,77.21],['杜拜',25.2,55.27],['開羅',30.04,31.24],['倫敦',51.51,-0.13],['巴黎',48.86,2.35],['奈洛比',-1.29,36.82],['開普敦',-33.92,18.42],['聖保羅',-23.55,-46.63],['紐約',40.71,-74.01],['芝加哥',41.88,-87.63],['洛杉磯',34.05,-118.24],['墨西哥城',19.43,-99.13],['檀香山',21.31,-157.86],['奧克蘭',-36.85,174.76]];
+S.auto=true; let autoCity=null, lastPick=0;
+function pickCity(now){
+  if(sunPos(now,S.lat,S.lon).alt>=5) return null;
+  let best=null,score=-1e9;
+  CITIES.forEach(c=>{const a=sunPos(now,c[1],c[2]).alt;const s=-Math.abs(a-35);if(s>score){score=s;best=c}});
+  return best;
+}
+function setAuto(on){S.auto=on;$('btnAuto').setAttribute('aria-pressed',on);$('btnAuto').textContent='自動切到白天的城市：'+(on?'開':'關');lastPick=0;autoCity=null;tick()}
+function tick(){
+  const real=new Date(), now=new Date(real.getTime()+S.tOff*60000);
+  if(S.playing){S.tOff=(S.tOff+10)%1440;$('tsim').value=S.tOff}
+  if(S.auto&&S.tOff===0&&!S.playing&&real-lastPick>60000){autoCity=pickCity(now);lastPick=+now;
+    if(autoCity) setChip('chipLoc','示範：'+autoCity[0]+'（你的位置現在是夜晚）','warn');
+    else setChip('chipLoc','位置：'+fmt(S.lat,3)+', '+fmt(S.lon,3),'');}
+  if(S.tOff!==0&&autoCity){autoCity=null;lastPick=0;setChip('chipLoc','位置：'+fmt(S.lat,3)+', '+fmt(S.lon,3),'')}
+  const L=S.auto&&autoCity&&S.tOff===0?{lat:autoCity[1],lon:autoCity[2]}:{lat:S.lat,lon:S.lon};
+  S.sun=sunPos(now,L.lat,L.lon);
+  homeDecl(real);
+  $('vDecl').innerHTML=(S.decl>=0?'+':'')+fmt(S.decl)+'<small>°</small>';
+  const cc=corr();$('vCorr').innerHTML=(cc.off>=0?'+':'')+fmt(cc.off)+'<small>°</small>';$('vCorrLab').textContent='目前修正（'+cc.src+'）';
+  $('tLab').textContent=S.tOff===0?'現在':'模擬 '+now.toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false})+'（+'+Math.floor(S.tOff/60)+' 小時 '+(S.tOff%60)+' 分）';
+  updConv();
+  $('clock').textContent=(S.tOff?'模擬 ':'')+now.toLocaleTimeString('zh-TW',{hour12:false});
+  $('vSunAz').innerHTML=fmt(S.sun.az)+'<small>°</small>';
+  $('vSunAlt').innerHTML=fmt(S.sun.alt)+'<small>°</small>';
+  const st=stats();
+  $('vMag').innerHTML=fmt(S.mag)+'<small>°</small>';
+  $('vTrue').innerHTML=(S.mag!=null?fmt(norm(S.mag+corr().off)):'--')+'<small>°</small>';
+  const a=S.sun.alt, n=$('sunNote');
+  const demoCity=S.auto&&autoCity&&S.tOff===0;
+  let msg,can=S.tOff===0&&!demoCity;
+  if(demoCity){msg='示範中：顯示'+autoCity[0]+'現在的太陽（方位 '+fmt(a<0?0:S.sun.az,0)+'°、高度 '+fmt(a,0)+'°）。你的位置是晚上，所以不能記錄校正；羅盤先套用你這裡的磁偏角。'}
+  else if(a<0){msg='太陽在地平線下，無法用太陽校正；羅盤目前套用'+corr().src+' '+fmt(corr().off)+'°。可以拉下方時間滑桿看白天的太陽。';can=false}
+  else if(a<5){msg='太陽太低，容易被遮擋、折射也大，建議等高一點。'}
+  else if(a>70){msg='太陽太高（>'+fmt(a,0)+'°），方位變化很快、影子很短，校正誤差會變大，建議早上或下午再校正。'}
+  else if(!can) msg='模擬時間：太陽在 '+fmt(S.sun.az,0)+'°、高度 '+fmt(a,0)+'°。記錄要回到「現在」才能用。';
+  else msg='條件良好：太陽在 '+fmt(S.sun.az,0)+'° 方向，高度 '+fmt(a,0)+'°。影子指向 '+fmt(norm(S.sun.az+180),0)+'°。';
+  n.textContent=msg;
+  $('btnManual').disabled=!can;
+  const flat=S.tilt==null||S.tilt<=10;
+  $('btnCapture').disabled=!(can&&S.mag!=null&&flat);
+  if(S.mag!=null){
+    if(!flat) setChip('chipSensor','請把手機放平（傾斜 '+fmt(S.tilt,0)+'°）','warn');
+    else if(S.acc!=null&&(S.acc<0||S.acc>15)) setChip('chipSensor','磁力計不穩，請在空中畫 8 字','warn');
+    else setChip('chipSensor','指南針：運作中'+(S.acc!=null?' ±'+fmt(S.acc,0)+'°':''),'ok');
+  }
+  draw();
+}
+
+// ---- 事件 ----
+function setMode(m){S.mode=m;$('mSun').setAttribute('aria-pressed',m==='sun');$('mShadow').setAttribute('aria-pressed',m==='shadow');
+  $('modeHint').textContent=m==='sun'?'手機平放，在頂端立一支筆。轉動手機，讓筆的影子沿著手機中線往底部延伸，這時頂端就指向太陽。不要直視太陽。':'手機平放，在底部立一支筆。轉動手機，讓筆的影子沿著手機中線往頂端延伸，這時頂端就順著影子、背對太陽。'}
+$('mSun').onclick=()=>setMode('sun');$('mShadow').onclick=()=>setMode('shadow');
+$('btnSensor').onclick=startSensor;
+$('btnCapture').onclick=()=>{if(S.mag!=null) addSample(S.mag,'感')};
+$('btnManual').onclick=()=>{const v=parseFloat($('manual').value);if(isNaN(v)||v<0||v>360){$('manual').focus();return}addSample(v,'手');$('manual').value=''};
+$('btnUndo').onclick=()=>{if(S.demo){S.samples=[];S.demo=false}else S.samples.pop();persist();renderLog()};
+$('btnClear').onclick=()=>{S.samples=[];S.demo=false;persist();renderLog()};
+$('conv').oninput=updConv;
+['lat','lon'].forEach(k=>$(k).onchange=()=>{let v=parseFloat($(k).value);if(!isNaN(v)){v=k==='lat'?Math.max(-89.9,Math.min(89.9,v)):wrap180(v);$(k).value=v;S.auto=false;autoCity=null;$('btnAuto').setAttribute('aria-pressed','false');$('btnAuto').textContent='自動切到白天的城市：關';S[k]=v;persist();setChip('chipLoc','位置：'+fmt(S.lat,3)+', '+fmt(S.lon,3),'')}});
+$('btnGeo').onclick=()=>{
+  if(!navigator.geolocation){setChip('chipLoc','無法定位，請手動輸入','warn');return}
+  setChip('chipLoc','定位中…','');
+  navigator.geolocation.getCurrentPosition(p=>{S.lat=p.coords.latitude;S.lon=p.coords.longitude;$('lat').value=S.lat.toFixed(4);$('lon').value=S.lon.toFixed(4);persist();setChip('chipLoc','位置：GPS','ok')},
+    ()=>setChip('chipLoc','定位被拒，請手動輸入','warn'),{enableHighAccuracy:true,timeout:8000});
+};
+document.querySelectorAll('#presets button').forEach(b=>b.onclick=()=>{
+  S.auto=false;$('btnAuto').setAttribute('aria-pressed','false');$('btnAuto').textContent='自動切到白天的城市：關';autoCity=null;
+  S.lat=parseFloat(b.dataset.lat);S.lon=parseFloat(b.dataset.lon);$('lat').value=b.dataset.lat;$('lon').value=b.dataset.lon;
+  persist();setChip('chipLoc','位置：'+b.textContent,'');tick();
+  const db=document.querySelector('.dialbox');if(db&&db.scrollIntoView)db.scrollIntoView({behavior:'smooth',block:'start'});
+});
+if(saved) setChip('chipLoc','位置：'+fmt(S.lat,3)+', '+fmt(S.lon,3),'');
+$('btnAuto').onclick=()=>setAuto(!S.auto);
+$('tsim').oninput=()=>{S.tOff=+$('tsim').value;tick()};
+function stopPlay(){S.playing=false;$('tPlay').setAttribute('aria-pressed','false');$('tPlay').textContent='▶ 播放 24 小時'}
+$('tNow').onclick=()=>{stopPlay();S.tOff=0;$('tsim').value=0;lastPick=0;tick()};
+$('tPlay').onclick=()=>{S.playing=!S.playing;$('tPlay').setAttribute('aria-pressed',S.playing);$('tPlay').textContent=S.playing?'❚❚ 暫停':'▶ 播放 24 小時'};
+$('tMorning').onclick=()=>{stopPlay();const base=Date.now();let prev=sunPos(new Date(base),S.lat,S.lon).alt;
+  for(let m=10;m<1440;m+=10){const a=sunPos(new Date(base+m*60000),S.lat,S.lon).alt;if(prev<20&&a>=20){S.tOff=m;break}prev=a}
+  $('tsim').value=S.tOff;tick()};
+window.addEventListener('resize',draw);
+renderLog();tick();setInterval(tick,250);
+})();
+</script>
